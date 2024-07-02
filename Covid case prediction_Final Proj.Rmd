@@ -1,0 +1,244 @@
+---
+title: "Covid 19 case prediction (linear regression models and eveluation)"
+author: "Gloria Xiang"
+date: "2022-12-03"
+output:
+  pdf_document: default
+---
+
+The covid19 dataset comes from real covid 19 statistics among different countries.\
+write.csv(covid_predict, "/Users/miao/Desktop/covid_predict.csv", row.names=FALSE)
+
+
+```{r include=FALSE}
+#set country and time frame (only after 10/01/2021 had completed records)
+library(COVID19)
+covid<-covid19("US",start="2021-10-01", end="2022-03-31")
+colnames(covid)
+```
+
+## Introduction: Descriptive analysis (linear plot)
+```{r}
+plot(covid$deaths~covid$date,type="l", xlab="Month")
+plot(covid$deaths~covid$tests,type="l")
+plot(covid$deaths~covid$confirmed,type="l")
+```
+
+Remove NA/character variables.\
+
+```{r}
+covid2<-covid[,-c(1,5,12:19,21:26,30:47) ]
+covid2$date<-as.numeric(covid2$date)
+```
+
+## Estimate:
+Create a model with deaths as the outcome variable and the rest of variables as predictors. We do the log transfer for test and vaccine variables in the full model.\
+
+```{r}
+lmod_full<-lm(sqrt(deaths)~log(tests)+log(vaccines)+confirmed+people_vaccinated+
+           people_fully_vaccinated+hosp+icu+international_movement_restrictions+
+           government_response_index+stringency_index+containment_health_index,
+         data=covid2)
+summary(lmod_full)
+```
+
+
+## Model Selection:
+
+Use BIC values to select variables.\
+
+```{r echo=TRUE}
+library(leaps)
+b <- regsubsets(deaths~log(tests)+log(vaccines)+confirmed+people_vaccinated+
+           people_fully_vaccinated+hosp+icu+international_movement_restrictions+
+           government_response_index+stringency_index+containment_health_index,
+         data=covid2)
+rs <- summary(b)
+# 1 subsets of each size up to 8
+BIC <- 182*log(rs$rss/182) + (2:9)*log(182)
+plot(BIC ~I(1:8), ylab="BIC", xlab="Number of Predictors")
+```
+The  BIC selection shows the more predictors, the lower BIC
+
+Use AIC forward selection to select variables.\
+
+```{r echo=TRUE}
+fit_null <- lm(deaths ~ 1, data = covid2)
+fit_AIC <- step(fit_null, 
+                scope = list(lower = fit_null,
+                             upper = lmod_full),
+                direction = "forward",criterion = "AIC")
+summary(fit_AIC)
+```
+
+Multiple R-squared is 0.9999. This is an over-fitted model, so we need to do the diagnostics and remove some predictors.
+
+## Diagnostics
+Variance constant
+```{r}
+plot(fit_AIC$fitted.values, fit_AIC$residuals,ylab="Residual", xlab="Fitted") 
+```
+There is no heteroskedasticity. 
+
+Normality test
+```{r}
+qqnorm(residuals(fit_AIC),ylab="Residuals",main="")
+qqline(residuals(fit_AIC))
+```
+Q-Q plot shows the residuals are normally distributed. 
+
+Shapiro-Wilk test
+```{r}
+shapiro.test(residuals(fit_AIC))
+```
+Do not reject null hypothesis. The residuals are normally distributed.\
+
+VIF check collinearity
+```{r}
+library(faraway)  
+x <- model.matrix(fit_AIC)[,-1] 
+vif(x)
+```
+
+The result of VIFs shows multicollinearity (big VIFs). Next, remove variables with big VIF, then do inference and prediction.  
+
+## model 1
+## using the model from AIC selection
+## Inference:
+95% Confidence interval 
+```{r}
+confint(fit_AIC)
+```
+
+## Prediction:
+Using real data from "2022-04-01" to "2022-06-18", because there is no "test" data available after 2022-06-18. 
+
+```{r}
+x0 <-covid19("US",start="2022-04-01", end="2022-06-18")[,-c(1,5,12:19,21:26,30:47) ]
+p<-predict(fit_AIC,new=x0)
+```
+
+```{r}
+plot(x0$deaths~x0$date,type="l", xlab="Month")
+i <- order(x0$date)
+lines(x0$date[i],p[i],lty=2)
+legend("topleft", inset=.05, title="Deaths of Covid19",
+c("Real","Predicted"), lty=1:2, horiz=TRUE)
+```
+
+Predicted values are smaller than real data.
+
+## model 2
+## Exclude predictors with big VIF
+```{r}
+VIF_lomd<-lm(deaths~confirmed+people_fully_vaccinated+hosp
+             +government_response_index+stringency_index,data=covid2)
+
+summary(VIF_lomd)
+```
+
+95% Confidence interval 
+```{r}
+confint(VIF_lomd)
+```
+Using real data from "2022-04-01" to "2022-09-30"
+```{r}
+covid_predict <-covid19("US",start="2022-04-01", end="2022-09-30")[,-c(1,5,12:19,21:26,30:47) ]
+p<-predict(VIF_lomd,new=covid_predict)
+```
+
+```{r}
+plot(covid_predict$deaths~covid_predict$date,type="l", xlab="Month")
+i <- order(covid_predict$date)
+lines(covid_predict$date[i],p[i],lty=2)
+legend("topleft", inset=.05, title="Deaths of Covid19",
+c("Real","Predicted"), lty=1:2, horiz=TRUE)
+```
+Similar results to model 1 (fit_AIC)
+
+
+## Transformation
+## Fianl model 1
+Convert all variables to standard units
+```{r}
+scsav <- data.frame(scale(covid2))
+Final_1<-lm(deaths~confirmed+people_fully_vaccinated+hosp+
+              government_response_index+stringency_index,data=scsav)
+summary(Final_1)
+```
+
+VIF check collinearity
+```{r}
+library(faraway)  
+x <- model.matrix(Final_1)[,-1] 
+vif(x)
+```
+
+## Prediction:
+Using real data from "2022-04-01" to "2022-06-18", because there is no "test" data available after 2022-06-18.(international_movement_restrictions unchanged during this period, so the prediction excluded this variable)
+
+Using real data from "2022-04-01" to "2022-09-30"
+
+```{r}
+covid_predict <-covid19("US",start="2022-04-01",
+                        end="2022-09-30")[,-c(1,5,12:19,21:26,30:47) ]
+
+covid_predict[,2:13]<-scale(covid_predict[,2:13])
+p<-predict(Final_1,new=covid_predict)
+```
+
+## inference-1
+```{r}
+confint(Final_1)
+```
+
+```{r}
+plot(covid_predict$deaths~covid_predict$date,type="l", xlab="Month")
+i <- order(covid_predict$date)
+lines(covid_predict$date[i],p[i],lty=2)
+legend("topleft", inset=.05, title="Deaths of Covid19",
+c("Real","Predicted1"), lty=1:2, horiz=TRUE)
+```
+
+
+Transformation2: box-cox
+```{r}
+Final_2 <- lm(sqrt(deaths)~confirmed+people_fully_vaccinated+hosp+ government_response_index+stringency_index,data=covid2)
+summary(Final_2)
+```
+
+```{r}
+x0 <-covid19("US",start="2022-04-01", end="2022-06-18")[,-c(1,5,12:19,21:26,30:47) ]
+x0$deaths<-sqrt(x0$deaths)
+p<-predict(lmod_full,new=x0)
+```
+
+```{r}
+plot(x0$deaths~x0$date,type="l", xlab="Month")
+i <- order(x0$date)
+lines(x0$date[i],p[i],lty=2)
+legend("topleft", inset=.05, title="Deaths of Covid19",
+c("Real","Predicted2"), lty=1:2, horiz=TRUE)
+```
+
+```{r}
+# Box-Cox 
+library(MASS)
+box<-boxcox(lmod_full, plotit=T,lambda=seq(0,1,by=0.1))
+
+cox <- data.frame(box$x, box$y)
+cox2 = cox[with(bc,order(-cox$box.y)),]
+lambda = cox2[1,"box.x"]
+covid2$deaths <- (covid2$deaths^lambda-1)/lambda
+logtrans(lmod_full,plotit=TRUE, alpha=seq(-min(covid2$deaths)+0.001,0,by=0.01))
+```
+
+Interpretation of the final model:
+The model has an R square around 0.99 in both predictions, which means, unfortunately, the models have over-fitting problem. It could because of: 
+  - 1. The death number kept a stable increasing status. The research time is not at the very beginning of the outbreak, vibration in cases is much more seldom; 
+  - 2. The dataset is a primary dataset, it hardly has any other evaluations, simply using a linear regression model could be hard to predict precisely.
+
+Future analysis suggestions: 
+  - From Study design, the model should have better performance by selecting train and test data randomly, since it could decrease the over-fitting problem by randomly choosing the date;
+  - Use the death rate(death/confirmation) instead of deaths number, and calculate the new-confirmed (confirmed - confirmed from yesterday), new-deaths (deaths- deaths from yesterday) in future study.
+  - Conduct Time Series Analysis to analysis the relationship between time pattern & deaths.
